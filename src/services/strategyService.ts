@@ -1,30 +1,26 @@
 // strategyService.ts - processa candles + inicia trading conectando à Binance
 
 import { newOrder } from "./orderService";
-import { saveTradeBuy, saveTradeSell } from "./databaseService";
 import { calculateEMA } from "../utils/indicators";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
 
 let isBought = false;
 let buyPrice = 0;
-let lastBuyTradeId: number | null = null;
 
 const tradeQuantity = 250;
 let priceHistory: number[] = [];
-let previousEma7 = 0;
-let previousEma40 = 0;
-const THRESHOLD = 0.0002;
+let prevDiff = 0;
 
 export async function fetchInitialCandles(): Promise<number[]> {
   const axios = await import("axios");
   try {
     const response = await axios.default.get("https://api.binance.com/api/v3/klines", {
       params: {
-        symbol: "DOGEUSDT",
+        symbol: process.env.SYMBOL,
         interval: "15m",
-        limit: 100
-      }
+        limit: 100,
+      },
     });
     return response.data.map((candle: any) => parseFloat(candle[4]));
   } catch (error) {
@@ -48,30 +44,21 @@ export function processKlineData(close: number) {
   if (priceHistory.length >= 40) {
     const ema7 = calculateEMA(priceHistory, 7);
     const ema40 = calculateEMA(priceHistory, 40);
+    const diff = ema7 - ema40;
 
-    console.log(`📊 EMA7: ${ema7.toFixed(6)} | EMA40: ${ema40.toFixed(6)}`);
+    console.log(`📊 EMA7: ${ema7.toFixed(6)} | EMA40: ${ema40.toFixed(6)} | Diferença: ${diff.toFixed(6)}`);
 
-    if (previousEma7 === 0 && previousEma40 === 0) {
-      previousEma7 = ema7;
-      previousEma40 = ema40;
-      return;
-    }
-
-    const crossedUp = previousEma7 <= previousEma40 && ema7 > ema40 + THRESHOLD;
-    const crossedDown = previousEma7 >= previousEma40 && ema7 < ema40 - THRESHOLD;
-
-    if (!isBought && crossedUp) {
-      console.log("💚 Cruzamento detectado: EMA7 cruzou acima da EMA40 → SINAL DE COMPRA");
+    if (!isBought && prevDiff < 0 && diff >= 0) {
+      console.log("💚 Cruzamento pra CIMA detectado → COMPRA");
       executeTrade("BUY", close, { ema7, ema40 });
     }
 
-    if (isBought && crossedDown) {
-      console.log("❤️ Cruzamento detectado: EMA7 cruzou abaixo da EMA40 → SINAL DE VENDA");
+    if (isBought && prevDiff > 0 && diff <= 0) {
+      console.log("❤️ Cruzamento pra BAIXO detectado → VENDA");
       executeTrade("SELL", close);
     }
 
-    previousEma7 = ema7;
-    previousEma40 = ema40;
+    prevDiff = diff;
   }
 }
 
@@ -93,9 +80,6 @@ async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: 
 
     logOperation(`📥 COMPRA | ${result.symbol} | Preço: ${price.toFixed(4)} | Qtd: ${result.executedQty}`);
 
-    saveTradeBuy({ buyPrice, ...indicators }, tradeQuantity, (id) => {
-      lastBuyTradeId = id;
-    });
   } else {
     console.log(`🔴 VENDA executada a ${price.toFixed(6)} USD`);
     const result = await newOrder(tradeQuantity.toString(), "SELL");
@@ -113,10 +97,5 @@ async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: 
     });
 
     logOperation(`📤 VENDA | ${result.symbol} | Preço: ${price.toFixed(4)} | Lucro: ${profit.toFixed(2)}`);
-
-    if (lastBuyTradeId !== null) {
-      saveTradeSell(lastBuyTradeId, price, profit);
-      lastBuyTradeId = null;
-    }
   }
-} 
+}

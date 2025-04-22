@@ -10,7 +10,9 @@ export async function connectToBinance() {
   const priceHistory = await fetchInitialCandles();
   console.log("✅ Histórico carregado. Iniciando conexão com WebSocket...");
 
-  wsBinance = new WebSocket("wss://stream.binance.com:9443/ws/dogeusdt@kline_15m");
+  const pair = process.env.SYMBOL?.toLowerCase();
+  const url = `${process.env.STREAM_URL}/${pair}@kline_15m`;
+  wsBinance = new WebSocket(url);
 
   wsBinance.on("open", () => {
     console.log("🔌 Conectado ao WebSocket da Binance.");
@@ -34,7 +36,7 @@ export async function connectToBinance() {
   });
 
   wsBinance.on("ping", (data) => {
-    console.clear()
+    console.clear();
     console.log("📡 Ping recebido da Binance, enviando Pong...");
     wsBinance.pong(data);
   });
