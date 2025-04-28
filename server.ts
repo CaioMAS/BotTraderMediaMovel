@@ -1,20 +1,57 @@
-import express from 'express';
-import cors from 'cors'; // <--- Importado aqui
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
 import { startTrading, getCurrentStatus, forceSellNow } from './src/services/strategyService';
 import { config } from './src/config/dotenv';
 
 const app = express();
+const jwtSecret = process.env.JWT_SECRET || 'senhaMuitoSecretaPadrao';
 
-app.use(cors()); // <--- Middleware ativado aqui
-app.use(express.json()); // Permite ler JSON
+app.use(cors());
+app.use(express.json());
 
-// ✅ Rota básica inicial
-app.get('/', (req, res) => {
+// 🛡️ Middleware de autenticação com Bearer Token
+function authenticateToken(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    res.status(401).json({ message: 'Token não fornecido' });
+    return; // <-- resolve o erro!
+  }
+
+  jwt.verify(token, jwtSecret, (err, user) => {
+    if (err) {
+      res.status(403).json({ message: 'Token inválido' });
+      return; // <-- resolve o erro!
+    }
+
+    (req as any).user = user;
+    next();
+  });
+}
+
+// ✅ Rota pública (raiz)
+app.get('/', (req: Request, res: Response) => {
   res.send('Trading bot is running.');
 });
 
-// ✅ Rota /status (GET)
-app.get('/status', (req, res) => {
+// ✅ Rota pública (/login) para gerar token
+app.post('/login', (req: Request, res: Response): void => {
+  const { password } = req.body;
+
+  if (password === process.env.PAINEL_PASSWORD) {
+    const token = jwt.sign({ user: 'admin' }, jwtSecret, { expiresIn: '8h' });
+    res.json({ token });
+    return;
+  } else {
+    res.status(401).json({ message: 'Senha incorreta' });
+    return;
+  }
+});
+
+// 🔒 Rotas protegidas com JWT
+app.get('/status', authenticateToken, (req: Request, res: Response) => {
   try {
     const status = getCurrentStatus();
     res.json(status);
@@ -24,8 +61,7 @@ app.get('/status', (req, res) => {
   }
 });
 
-// ✅ Rota /sell-now (POST)
-app.post('/sell-now', async (req, res) => {
+app.post('/sell-now', authenticateToken, async (req: Request, res: Response) => {
   try {
     const result = await forceSellNow();
     res.json({ status: 'success', message: 'Venda forçada executada.' });

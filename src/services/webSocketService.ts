@@ -37,7 +37,7 @@ export async function connectToBinance() {
 
   wsBinance.on("ping", (data) => {
     console.clear();
-    console.log("📡 Ping recebido da Binance, enviando Pong...");
+    //console.log("📡 Ping recebido da Binance, enviando Pong...");
     wsBinance.pong(data);
   });
 
