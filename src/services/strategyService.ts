@@ -1,13 +1,13 @@
 // strategyService.ts - processa candles + inicia trading conectando à Binance
 
 import { newOrder } from "./orderService";
-import { calculateEMA } from "../utils/indicators";
+import { calculateEMA, calculateVolatility, calculateGradient } from "../utils/indicators";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
 
 let isBought = false;
 let buyPrice = 0;
-const tradeQuantity = 250;
+const tradeQuantity = 0.001;
 let priceHistory: number[] = [];
 let prevDiff = 0;
 const symbol = process.env.SYMBOL || 'SYMBOL_NOT_SET';
@@ -41,20 +41,30 @@ export function processKlineData(close: number) {
   priceHistory.push(close);
   if (priceHistory.length > 100) priceHistory.shift();
 
-  if (priceHistory.length >= 40) {
+  if (priceHistory.length >= 41) {
     const ema7 = calculateEMA(priceHistory, 7);
     const ema40 = calculateEMA(priceHistory, 40);
+    const ema7Prev = calculateEMA(priceHistory.slice(0, -1), 7);
+    const ema40Prev = calculateEMA(priceHistory.slice(0, -1), 40);
+
     const diff = ema7 - ema40;
+    const volatility = calculateVolatility(priceHistory, 10);
+    const grad7 = calculateGradient(ema7, ema7Prev);
+    const grad40 = calculateGradient(ema40, ema40Prev);
+    const threshold = volatility * 0.1;
 
-    console.log(`📊 EMA7: ${ema7.toFixed(6)} | EMA40: ${ema40.toFixed(6)} | Diferença: ${diff.toFixed(6)}`);
+    console.log(`📊 EMA7: ${ema7.toFixed(6)} | EMA40: ${ema40.toFixed(6)} | Dif: ${diff.toFixed(6)} | Vol: ${volatility.toFixed(6)}`);
+    console.log(`📈 Grad EMA7: ${grad7.toFixed(6)} | Grad EMA40: ${grad40.toFixed(6)} | Thres: ${threshold.toFixed(6)}`);
 
-    if (!isBought && prevDiff < 0 && diff >= 0) {
-      console.log("💚 Cruzamento pra CIMA detectado → COMPRA");
+    // 💚 Compra antecipada
+    if (!isBought && Math.abs(diff) < threshold && grad7 > 0 && grad7 > grad40) {
+      console.log("💚 Antecipação de cruzamento para CIMA → COMPRA");
       executeTrade("BUY", close, { ema7, ema40 });
     }
 
-    if (isBought && prevDiff > 0 && diff <= 0) {
-      console.log("❤️ Cruzamento pra BAIXO detectado → VENDA");
+    // ❤️ Venda antecipada
+    if (isBought && Math.abs(diff) < threshold && grad7 < 0 && grad7 < grad40) {
+      console.log("❤️ Antecipação de cruzamento para BAIXO → VENDA");
       executeTrade("SELL", close);
     }
 

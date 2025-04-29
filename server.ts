@@ -7,7 +7,21 @@ import { config } from './src/config/dotenv';
 const app = express();
 const jwtSecret = process.env.JWT_SECRET || 'senhaMuitoSecretaPadrao';
 
-app.use(cors());
+const allowedOrigins = [
+  'http://localhost:3000', // front-end
+];
+app.use(cors({
+  origin: function (origin, callback) {
+    // permite chamadas do próprio server (como postman) e da lista
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 
 // 🛡️ Middleware de autenticação com Bearer Token

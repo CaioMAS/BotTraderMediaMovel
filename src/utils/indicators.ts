@@ -97,3 +97,16 @@ export function calculateMACD(prices: number[], shortPeriod: number, longPeriod:
 
   return { macd, signal, histogram }
 }
+
+export function calculateVolatility(prices: number[], period: number = 10): number {
+  if (prices.length < period) return 0;
+  const recent = prices.slice(-period);
+  const mean = recent.reduce((a, b) => a + b, 0) / period;
+  const squaredDiffs = recent.map(p => Math.pow(p - mean, 2));
+  const variance = squaredDiffs.reduce((a, b) => a + b, 0) / period;
+  return Math.sqrt(variance);
+}
+
+export function calculateGradient(current: number, previous: number): number {
+  return current - previous;
+}
