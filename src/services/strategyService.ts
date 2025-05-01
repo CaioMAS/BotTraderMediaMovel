@@ -4,10 +4,11 @@ import { newOrder } from "./orderService";
 import { calculateEMA, calculateVolatility, calculateGradient } from "../utils/indicators";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
+import axios from "axios";
 
 let isBought = false;
 let buyPrice = 0;
-const tradeQuantity = 0.001;
+const tradeQuantity = parseFloat(process.env.TRADE_QUANTITY || '0.001')
 let priceHistory: number[] = [];
 let prevDiff = 0;
 const symbol = process.env.SYMBOL || 'SYMBOL_NOT_SET';
@@ -33,6 +34,23 @@ export async function startTrading() {
   console.log("🔁 Iniciando processo de trading...");
   priceHistory = await fetchInitialCandles();
   await connectToBinance();
+  setInterval(async () => {
+    try {
+      const { data } = await axios.get(`https://api.binance.com/api/v3/ticker/price`, {
+        params: { symbol }
+      });
+  
+      const precoAtual = parseFloat(data.price);
+  
+      console.clear();
+      console.log(`🩺 BOT VIVO | ${symbol}`);
+      console.log(`💰 Preço atual: ${precoAtual}`);
+      console.log(`📦 Histórico: ${priceHistory.length} candles`);
+      console.log(`📊 Status: ${isBought ? `🟢 COMPRADO a ${buyPrice}` : '🔴 LIVRE'}`);
+    } catch (err) {
+      console.error("Erro ao buscar preço atual:", err);
+    }
+  }, 5000);
 }
 
 export function processKlineData(close: number) {
@@ -70,6 +88,8 @@ export function processKlineData(close: number) {
 
     prevDiff = diff;
   }
+
+ 
 }
 
 async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: any) {
@@ -124,7 +144,8 @@ export function getCurrentStatus() {
 
 export async function forceSellNow() {
   if (!isBought) {
-    throw new Error('Nenhuma operação aberta para vender.');
+    // Não quebra a aplicação, mas permite log e controle no front
+    return { status: 'warning', message: 'Nenhuma operação aberta para vender.' };
   }
 
   const precoAtual = priceHistory[priceHistory.length - 1] || buyPrice;
@@ -133,7 +154,7 @@ export async function forceSellNow() {
   const result = await newOrder(tradeQuantity.toString(), "SELL");
 
   if (!result || result.status !== "FILLED") {
-    throw new Error('Erro ao executar venda manual.');
+    return { status: 'error', message: 'Erro ao executar venda manual.' };
   }
 
   const profit = (precoAtual - buyPrice) * tradeQuantity;
@@ -151,7 +172,7 @@ export async function forceSellNow() {
   isBought = false;
   buyPrice = 0;
 
-  return result;
+  return { status: 'success', result };
 }
 
 

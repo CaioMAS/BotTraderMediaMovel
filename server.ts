@@ -7,41 +7,31 @@ import { config } from './src/config/dotenv';
 const app = express();
 const jwtSecret = process.env.JWT_SECRET || 'senhaMuitoSecretaPadrao';
 
-const allowedOrigins = [
-  'http://localhost:3000', // front-end
-];
 app.use(cors({
-  origin: function (origin, callback) {
-    // permite chamadas do próprio server (como postman) e da lista
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: 'http://localhost:3000', // ajustar se necessário
   credentials: true,
 }));
 
 app.use(express.json());
 
 // 🛡️ Middleware de autenticação com Bearer Token
-function authenticateToken(req: Request, res: Response, next: NextFunction) {
+function authenticateToken(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    res.status(401).json({ message: 'Token não fornecido' });
-    return; // <-- resolve o erro!
+    res.status(401).json({ status: 'error', message: 'Token não fornecido.' });
+    return;
   }
 
   jwt.verify(token, jwtSecret, (err, user) => {
     if (err) {
-      res.status(403).json({ message: 'Token inválido' });
-      return; // <-- resolve o erro!
+      res.status(403).json({ status: 'error', message: 'Token inválido.' });
+      return;
     }
 
     (req as any).user = user;
-    next();
+    next(); // 👍 Só next(), nada de retorno
   });
 }
 
@@ -50,42 +40,53 @@ app.get('/', (req: Request, res: Response) => {
   res.send('Trading bot is running.');
 });
 
-// ✅ Rota pública (/login) para gerar token
+// ✅ Rota pública (/login)
 app.post('/login', (req: Request, res: Response): void => {
-  const { password } = req.body;
-
-  if (password === process.env.PAINEL_PASSWORD) {
-    const token = jwt.sign({ user: 'admin' }, jwtSecret, { expiresIn: '8h' });
-    res.json({ token });
-    return;
-  } else {
-    res.status(401).json({ message: 'Senha incorreta' });
-    return;
+  try {
+    const { password } = req.body;
+    if (password === process.env.PAINEL_PASSWORD) {
+      const token = jwt.sign({ user: 'admin' }, jwtSecret, { expiresIn: '8h' });
+      res.json({ token });
+    } else {
+      res.status(401).json({ status: 'error', message: 'Senha incorreta.' });
+    }
+  } catch (err) {
+    console.error('Erro no login:', err);
+    res.status(500).json({ status: 'error', message: 'Erro interno no login.' });
   }
 });
 
-// 🔒 Rotas protegidas com JWT
-app.get('/status', authenticateToken, (req: Request, res: Response) => {
+// 🔒 /status
+app.get('/status', authenticateToken, (req: Request, res: Response): void => {
   try {
     const status = getCurrentStatus();
-    res.json(status);
+    res.json(status); // ✅ sem return
   } catch (error) {
     console.error('Erro ao buscar status:', error);
     res.status(500).json({ status: 'error', message: 'Erro ao buscar status.' });
   }
 });
 
-app.post('/sell-now', authenticateToken, async (req: Request, res: Response) => {
+// 🔒 /sell-now
+app.post('/sell-now', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await forceSellNow();
-    res.json({ status: 'success', message: 'Venda forçada executada.' });
-  } catch (error) {
+
+    if (result?.status === 'warning') {
+      res.status(400).json(result);
+      return;
+    }
+
+    res.json({ status: 'success', message: 'Venda forçada executada com sucesso.', result });
+  } catch (error: any) {
+    const msg = typeof error.message === 'string' ? error.message : 'Erro inesperado ao vender.';
+    const code = msg.includes('Nenhuma operação') ? 400 : 500;
     console.error('Erro ao vender:', error);
-    res.status(500).json({ status: 'error', message: 'Erro ao tentar vender.' });
+    res.status(code).json({ status: 'error', message: msg });
   }
 });
 
 app.listen(config.PORT, () => {
-  console.log(`Server running on port ${config.PORT}`);
+  console.log(`✅ Server running on port ${config.PORT}`);
   startTrading();
 });
