@@ -8,7 +8,10 @@ const app = express();
 const jwtSecret = process.env.JWT_SECRET || 'senhaMuitoSecretaPadrao';
 
 app.use(cors({
-  origin: 'http://localhost:3000', // ajustar se necessário
+  origin: [
+    'http://localhost:3000',
+    'http://82.25.92.197:3000'
+  ],
   credentials: true,
 }));
 

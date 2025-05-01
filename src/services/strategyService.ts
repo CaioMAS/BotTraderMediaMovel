@@ -34,23 +34,7 @@ export async function startTrading() {
   console.log("🔁 Iniciando processo de trading...");
   priceHistory = await fetchInitialCandles();
   await connectToBinance();
-  setInterval(async () => {
-    try {
-      const { data } = await axios.get(`https://api.binance.com/api/v3/ticker/price`, {
-        params: { symbol }
-      });
   
-      const precoAtual = parseFloat(data.price);
-  
-      console.clear();
-      console.log(`🩺 BOT VIVO | ${symbol}`);
-      console.log(`💰 Preço atual: ${precoAtual}`);
-      console.log(`📦 Histórico: ${priceHistory.length} candles`);
-      console.log(`📊 Status: ${isBought ? `🟢 COMPRADO a ${buyPrice}` : '🔴 LIVRE'}`);
-    } catch (err) {
-      console.error("Erro ao buscar preço atual:", err);
-    }
-  }, 5000);
 }
 
 export function processKlineData(close: number) {
