@@ -1,162 +1,276 @@
-// strategyService.ts - processa candles + inicia trading conectando à Binance
+// strategyService.ts - versão com technicalindicators
 
 import { newOrder } from "./orderService";
-import { calculateEMA, calculateVolatility, calculateGradient } from "../utils/indicators";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
 import axios from "axios";
+import { SMA, RSI, OBV } from 'technicalindicators';
 
+// Configurações da estratégia
+const STRATEGY_CONFIG = {
+  fastSMA: 9,
+  slowSMA: 21,
+  volumeSMA: 20,
+  rsiPeriod: 14,
+  rsiOverbought: 70,
+  rsiOversold: 30,
+  minVolumeFactor: 1.5,
+  stopLossPercent: 0.02,
+  takeProfitPercent: 0.04,
+  trailingStopPercent: 0.015,
+  minTrendStrength: 0.0003
+};
+
+// Estado do trading
 let isBought = false;
 let buyPrice = 0;
-const tradeQuantity = parseFloat(process.env.TRADE_QUANTITY || '0.001')
-let priceHistory: number[] = [];
-let prevDiff = 0;
-const symbol = process.env.SYMBOL || 'SYMBOL_NOT_SET';
+let highestPriceSinceBuy = 0;
+const tradeQuantity = parseFloat(process.env.TRADE_QUANTITY || "0.01");
+const symbol = process.env.SYMBOL || 'BTCUSDT';
 
-export async function fetchInitialCandles(): Promise<number[]> {
-  const axios = await import("axios");
+// Histórico de dados
+let priceHistory: number[] = [];
+let volumeHistory: number[] = [];
+
+export async function fetchInitialCandles() {
   try {
-    const response = await axios.default.get("https://api.binance.com/api/v3/klines", {
+    const response = await axios.get("https://api.binance.com/api/v3/klines", {
       params: {
         symbol: symbol,
         interval: "15m",
         limit: 100,
       },
     });
-    return response.data.map((candle: any) => parseFloat(candle[4]));
+    
+    // Armazena preços e volumes
+    priceHistory = response.data.map((candle: any) => parseFloat(candle[4]));
+    volumeHistory = response.data.map((candle: any) => parseFloat(candle[5]));
+    
+    console.log(`✅ Carregados ${priceHistory.length} candles iniciais`);
   } catch (error) {
     console.error("❌ Erro ao buscar candles iniciais:", error);
-    return [];
   }
 }
 
 export async function startTrading() {
-  console.log("🔁 Iniciando processo de trading...");
-  priceHistory = await fetchInitialCandles();
+  console.log("🔁 Iniciando processo de trading com estratégia MM + Volume + RSI");
+  await fetchInitialCandles();
   await connectToBinance();
   
+  // Monitoramento de status
+  setInterval(async () => {
+    try {
+      const { data } = await axios.get(`https://api.binance.com/api/v3/ticker/price`, {
+        params: { symbol }
+      });
+  
+      const currentPrice = parseFloat(data.price);
+      
+      // Atualiza preço máximo para trailing stop
+      if (isBought) {
+        highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
+      }
+  
+      console.clear();
+      console.log(`🩺 BOT VIVO | ${symbol} | Estratégia MM+Volume+RSI`);
+      console.log(`💰 Preço atual: ${currentPrice}`);
+      console.log(`📦 Histórico: ${priceHistory.length} candles`);
+      console.log(`📊 Status: ${isBought ? `🟢 COMPRADO a ${buyPrice} (Max: ${highestPriceSinceBuy})` : '🔴 LIVRE'}`);
+    } catch (err) {
+      console.error("Erro ao buscar preço atual:", err);
+    }
+  }, 5000);
 }
 
-export function processKlineData(close: number) {
-  console.log("📥 Novo candle recebido. Analisando indicadores...");
-
+export function processKlineData(kline: any) {
+  const close = parseFloat(kline.close);
+  const volume = parseFloat(kline.volume);
+  
+  // Atualiza históricos
   priceHistory.push(close);
-  if (priceHistory.length > 100) priceHistory.shift();
-
-  if (priceHistory.length >= 41) {
-    const ema7 = calculateEMA(priceHistory, 7);
-    const ema40 = calculateEMA(priceHistory, 40);
-    const ema7Prev = calculateEMA(priceHistory.slice(0, -1), 7);
-    const ema40Prev = calculateEMA(priceHistory.slice(0, -1), 40);
-
-    const diff = ema7 - ema40;
-    const volatility = calculateVolatility(priceHistory, 10);
-    const grad7 = calculateGradient(ema7, ema7Prev);
-    const grad40 = calculateGradient(ema40, ema40Prev);
-    const threshold = volatility * 0.1;
-
-    console.log(`📊 EMA7: ${ema7.toFixed(6)} | EMA40: ${ema40.toFixed(6)} | Dif: ${diff.toFixed(6)} | Vol: ${volatility.toFixed(6)}`);
-    console.log(`📈 Grad EMA7: ${grad7.toFixed(6)} | Grad EMA40: ${grad40.toFixed(6)} | Thres: ${threshold.toFixed(6)}`);
-
-    // 💚 Compra antecipada
-    if (!isBought && Math.abs(diff) < threshold && grad7 > 0 && grad7 > grad40) {
-      console.log("💚 Antecipação de cruzamento para CIMA → COMPRA");
-      executeTrade("BUY", close, { ema7, ema40 });
-    }
-
-    // ❤️ Venda antecipada
-    if (isBought && Math.abs(diff) < threshold && grad7 < 0 && grad7 < grad40) {
-      console.log("❤️ Antecipação de cruzamento para BAIXO → VENDA");
-      executeTrade("SELL", close);
-    }
-
-    prevDiff = diff;
+  volumeHistory.push(volume);
+  
+  // Mantém um tamanho fixo para os históricos
+  if (priceHistory.length > 100) {
+    priceHistory.shift();
+    volumeHistory.shift();
   }
 
- 
+  // Só processa se tivermos dados suficientes
+  const minPeriod = Math.max(STRATEGY_CONFIG.slowSMA, STRATEGY_CONFIG.rsiPeriod);
+  if (priceHistory.length >= minPeriod) {
+    // Calcula todos os indicadores necessários usando technicalindicators
+    const fastSMA = SMA.calculate({
+      period: STRATEGY_CONFIG.fastSMA,
+      values: priceHistory
+    }).slice(-1)[0] || 0;
+
+    const slowSMA = SMA.calculate({
+      period: STRATEGY_CONFIG.slowSMA,
+      values: priceHistory
+    }).slice(-1)[0] || 0;
+
+    const volumeSMA = SMA.calculate({
+      period: STRATEGY_CONFIG.volumeSMA,
+      values: volumeHistory
+    }).slice(-1)[0] || 0;
+
+    const rsi = RSI.calculate({
+      period: STRATEGY_CONFIG.rsiPeriod,
+      values: priceHistory
+    }).slice(-1)[0] || 50;
+
+    const obv = OBV.calculate({
+      close: priceHistory,
+      volume: volumeHistory
+    }).slice(-1)[0] || 0;
+
+    // Calcula a força da tendência (diferença entre as MMs)
+    const trendStrength = fastSMA - slowSMA;
+
+    // Condições para entrada LONG
+    const isUptrend = fastSMA > slowSMA && trendStrength > STRATEGY_CONFIG.minTrendStrength;
+    const hasHighVolume = volume > volumeSMA * STRATEGY_CONFIG.minVolumeFactor;
+    const obvIncreasing = obv > OBV.calculate({
+      close: priceHistory.slice(0, -1),
+      volume: volumeHistory.slice(0, -1)
+    }).slice(-1)[0];
+    const rsiOk = rsi > 50 && rsi < STRATEGY_CONFIG.rsiOverbought;
+    const priceAboveFastSMA = close > fastSMA;
+    const isGreenCandle = close > parseFloat(kline.open);
+    
+    // Condição de entrada
+    if (!isBought && isUptrend && hasHighVolume && obvIncreasing && rsiOk && priceAboveFastSMA && isGreenCandle) {
+      console.log("💚 Sinal de COMPRA detectado");
+      console.log(`📊 Indicadores: 
+        FastSMA: ${fastSMA.toFixed(2)}
+        SlowSMA: ${slowSMA.toFixed(2)}
+        Volume: ${volume.toFixed(2)} (Avg: ${volumeSMA.toFixed(2)})
+        RSI: ${rsi.toFixed(2)}
+        OBV: ${obv.toFixed(2)}`);
+      
+      executeTrade("BUY", close, {
+        fastSMA,
+        slowSMA,
+        volume,
+        volumeSMA,
+        rsi,
+        obv
+      });
+    }
+    
+    // Condições de saída
+    if (isBought) {
+      const currentProfitPercent = (close - buyPrice) / buyPrice * 100;
+      const trailingStopPrice = highestPriceSinceBuy * (1 - STRATEGY_CONFIG.trailingStopPercent);
+      
+      const stopLoss = close <= buyPrice * (1 - STRATEGY_CONFIG.stopLossPercent);
+      const takeProfit = close >= buyPrice * (1 + STRATEGY_CONFIG.takeProfitPercent);
+      const trailingStop = close <= trailingStopPrice;
+      const rsiOverbought = rsi >= STRATEGY_CONFIG.rsiOverbought;
+      const trendReversal = fastSMA < slowSMA;
+      
+      if (stopLoss || takeProfit || trailingStop || rsiOverbought || trendReversal) {
+        let reason = "";
+        if (stopLoss) reason = `Stop Loss (${STRATEGY_CONFIG.stopLossPercent * 100}%)`;
+        else if (takeProfit) reason = `Take Profit (${STRATEGY_CONFIG.takeProfitPercent * 100}%)`;
+        else if (trailingStop) reason = `Trailing Stop (${STRATEGY_CONFIG.trailingStopPercent * 100}%)`;
+        else if (rsiOverbought) reason = `RSI Sobrecarregado (${rsi.toFixed(1)})`;
+        else if (trendReversal) reason = "Reversão de Tendência";
+        
+        console.log(`❤️ Sinal de VENDA (${reason}) | Lucro: ${currentProfitPercent.toFixed(2)}%`);
+        executeTrade("SELL", close);
+      }
+    }
+  }
 }
 
 async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: any) {
-  if (action === "BUY") {
-    console.log(`🟢 COMPRA executada a ${price.toFixed(6)} USD`);
-    const result = await newOrder(tradeQuantity.toString(), "BUY");
-    if (!result || result.status !== "FILLED") return;
+  try {
+    if (action === "BUY") {
+      console.log(`🟢 COMPRA executada a ${price.toFixed(6)} USD`);
+      const result = await newOrder(tradeQuantity.toString(), "BUY");
+      if (!result || result.status !== "FILLED") return;
 
-    buyPrice = price;
-    isBought = true;
+      buyPrice = price;
+      highestPriceSinceBuy = price;
+      isBought = true;
 
-    appendToJSONFile("purchases", {
-      date: new Date().toISOString(),
-      symbol: result.symbol,
-      price: parseFloat(price.toFixed(6)),
-      quantity: parseFloat(result.executedQty),
-    });
+      appendToJSONFile("purchases", {
+        date: new Date().toISOString(),
+        symbol: result.symbol,
+        price: parseFloat(price.toFixed(6)),
+        quantity: parseFloat(result.executedQty),
+        indicators
+      });
 
-    logOperation(`📥 COMPRA | ${result.symbol} | Preço: ${price.toFixed(4)} | Qtd: ${result.executedQty}`);
+      logOperation(`📥 COMPRA | ${result.symbol} | Preço: ${price.toFixed(4)} | Qtd: ${result.executedQty}`);
 
-  } else {
-    console.log(`🔴 VENDA executada a ${price.toFixed(6)} USD`);
-    const result = await newOrder(tradeQuantity.toString(), "SELL");
-    if (!result || result.status !== "FILLED") return;
+    } else {
+      console.log(`🔴 VENDA executada a ${price.toFixed(6)} USD`);
+      const result = await newOrder(tradeQuantity.toString(), "SELL");
+      if (!result || result.status !== "FILLED") return;
 
-    const profit = (price - buyPrice) * tradeQuantity;
-    isBought = false;
-    buyPrice = 0; // Limpa o preço de compra
+      const profit = (price - buyPrice) * tradeQuantity;
+      isBought = false;
+      buyPrice = 0;
+      highestPriceSinceBuy = 0;
 
-    appendToJSONFile("sales", {
-      date: new Date().toISOString(),
-      symbol: result.symbol,
-      price: parseFloat(price.toFixed(6)),
-      quantity: parseFloat(result.executedQty),
-      profit: parseFloat(profit.toFixed(6)),
-    });
+      appendToJSONFile("sales", {
+        date: new Date().toISOString(),
+        symbol: result.symbol,
+        price: parseFloat(price.toFixed(6)),
+        quantity: parseFloat(result.executedQty),
+        profit: parseFloat(profit.toFixed(6)),
+        roi: ((price / buyPrice - 1) * 100).toFixed(2) + '%'
+      });
 
-    logOperation(`📤 VENDA | ${result.symbol} | Preço: ${price.toFixed(4)} | Lucro: ${profit.toFixed(2)}`);
+      logOperation(`📤 VENDA | ${result.symbol} | Preço: ${price.toFixed(4)} | Lucro: ${profit.toFixed(2)}`);
+    }
+  } catch (error) {
+    console.error(`❌ Erro ao executar ${action}`, error);
   }
 }
 
-// ✅ Funções novas para o Front
-
+// Funções auxiliares (mantidas do seu código original)
 export function getCurrentStatus() {
   return {
     isBought,
     buyPrice,
     tradeQuantity,
     symbol,
+    highestPriceSinceBuy
   };
 }
 
 export async function forceSellNow() {
   if (!isBought) {
-    // Não quebra a aplicação, mas permite log e controle no front
     return { status: 'warning', message: 'Nenhuma operação aberta para vender.' };
   }
 
-  const precoAtual = priceHistory[priceHistory.length - 1] || buyPrice;
-
-  console.log(`🔴 VENDA MANUAL executada a ${precoAtual.toFixed(6)} USD`);
+  const currentPrice = priceHistory[priceHistory.length - 1] || buyPrice;
+  console.log(`🔴 VENDA MANUAL executada a ${currentPrice.toFixed(6)} USD`);
   const result = await newOrder(tradeQuantity.toString(), "SELL");
 
   if (!result || result.status !== "FILLED") {
     return { status: 'error', message: 'Erro ao executar venda manual.' };
   }
 
-  const profit = (precoAtual - buyPrice) * tradeQuantity;
+  const profit = (currentPrice - buyPrice) * tradeQuantity;
 
   appendToJSONFile("sales", {
     date: new Date().toISOString(),
     symbol: result.symbol,
-    price: parseFloat(precoAtual.toFixed(6)),
+    price: parseFloat(currentPrice.toFixed(6)),
     quantity: parseFloat(result.executedQty),
     profit: parseFloat(profit.toFixed(6)),
   });
 
-  logOperation(`📤 VENDA MANUAL | ${result.symbol} | Preço: ${precoAtual.toFixed(4)} | Lucro: ${profit.toFixed(2)}`);
+  logOperation(`📤 VENDA MANUAL | ${result.symbol} | Preço: ${currentPrice.toFixed(4)} | Lucro: ${profit.toFixed(2)}`);
 
   isBought = false;
   buyPrice = 0;
+  highestPriceSinceBuy = 0;
 
   return { status: 'success', result };
 }
-
-
