@@ -27,14 +27,6 @@ const symbol = process.env.SYMBOL || 'BTCUSDT';
 let priceHistory: number[] = [];
 let volumeHistory: number[] = [];
 
-function logStatus(currentPrice: number) {
-  const statusMessage = `[${new Date().toISOString()}] ${symbol} | Preço: ${currentPrice} | Status: ` +
-    (isBought ? `COMPRADO (${buyPrice})` : 'LIVRE');
-  process.stdout.write('\x1b[0G');
-  process.stdout.write(statusMessage);
-  process.stdout.write('\x1b[K');
-}
-
 export async function fetchInitialCandles() {
   try {
     const response = await axios.get("https://api.binance.com/api/v3/klines", {
@@ -66,12 +58,13 @@ export async function startTrading() {
       if (isBought) {
         highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
       }
-      logStatus(currentPrice);
+      // Logs recorrentes desativados
     } catch (err) {
-      console.error("\nErro ao buscar preço atual:", err);
+      console.error("Erro ao buscar preço atual:", err);
     }
   }, 5000);
 }
+
 
 
 export function processKlineData(kline: any) {
