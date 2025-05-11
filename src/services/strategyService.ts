@@ -1,3 +1,5 @@
+// strategyService.ts (com inclinação de MM, OBV de 3 candles e cooldown)
+
 import { newOrder } from "./orderService";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
@@ -15,7 +17,8 @@ const STRATEGY_CONFIG = {
   stopLossPercent: 0.02,
   takeProfitPercent: 0.04,
   trailingStopPercent: 0.015,
-  minTrendStrength: 0.0003
+  minTrendStrength: 0.0003,
+  tradeCooldownMs: 30000
 };
 
 let isBought = false;
@@ -26,6 +29,7 @@ const symbol = process.env.SYMBOL || 'BTCUSDT';
 
 let priceHistory: number[] = [];
 let volumeHistory: number[] = [];
+let lastTradeTime = 0;
 
 export async function fetchInitialCandles() {
   try {
@@ -58,103 +62,64 @@ export async function startTrading() {
       if (isBought) {
         highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
       }
-      // Logs recorrentes desativados
     } catch (err) {
       console.error("Erro ao buscar preço atual:", err);
     }
   }, 5000);
 }
 
-
-
 export function processKlineData(kline: any) {
   const close = parseFloat(kline.close);
   const volume = parseFloat(kline.volume);
-  
-  // Atualiza históricos
+
   priceHistory.push(close);
   volumeHistory.push(volume);
-  
-  // Mantém um tamanho fixo para os históricos
+
   if (priceHistory.length > 100) {
     priceHistory.shift();
     volumeHistory.shift();
   }
 
-  // Só processa se tivermos dados suficientes
   const minPeriod = Math.max(STRATEGY_CONFIG.slowSMA, STRATEGY_CONFIG.rsiPeriod);
-  if (priceHistory.length >= minPeriod) {
-    // Calcula todos os indicadores necessários usando technicalindicators
-    const fastSMA = SMA.calculate({
-      period: STRATEGY_CONFIG.fastSMA,
-      values: priceHistory
-    }).slice(-1)[0] || 0;
+  if (priceHistory.length >= minPeriod + 3) {
+    const fastSMAValues = SMA.calculate({ period: STRATEGY_CONFIG.fastSMA, values: priceHistory });
+    const slowSMAValues = SMA.calculate({ period: STRATEGY_CONFIG.slowSMA, values: priceHistory });
+    const volumeSMA = SMA.calculate({ period: STRATEGY_CONFIG.volumeSMA, values: volumeHistory }).slice(-1)[0] || 0;
+    const rsi = RSI.calculate({ period: STRATEGY_CONFIG.rsiPeriod, values: priceHistory }).slice(-1)[0] || 50;
+    const obvHistory = OBV.calculate({ close: priceHistory, volume: volumeHistory });
+    const obv = obvHistory.slice(-1)[0] || 0;
 
-    const slowSMA = SMA.calculate({
-      period: STRATEGY_CONFIG.slowSMA,
-      values: priceHistory
-    }).slice(-1)[0] || 0;
+    const fastSMA = fastSMAValues.slice(-1)[0] || 0;
+    const slowSMA = slowSMAValues.slice(-1)[0] || 0;
+    const fastSMA_prev = fastSMAValues.slice(-2)[0] || 0;
 
-    const volumeSMA = SMA.calculate({
-      period: STRATEGY_CONFIG.volumeSMA,
-      values: volumeHistory
-    }).slice(-1)[0] || 0;
-
-    const rsi = RSI.calculate({
-      period: STRATEGY_CONFIG.rsiPeriod,
-      values: priceHistory
-    }).slice(-1)[0] || 50;
-
-    const obv = OBV.calculate({
-      close: priceHistory,
-      volume: volumeHistory
-    }).slice(-1)[0] || 0;
-
-    // Calcula a força da tendência (diferença entre as MMs)
+    const smaInclination = fastSMA - fastSMA_prev;
     const trendStrength = fastSMA - slowSMA;
 
-    // Condições para entrada LONG
-    const isUptrend = fastSMA > slowSMA && trendStrength > STRATEGY_CONFIG.minTrendStrength;
+    const isUptrend = fastSMA > slowSMA && smaInclination > STRATEGY_CONFIG.minTrendStrength;
     const hasHighVolume = volume > volumeSMA * STRATEGY_CONFIG.minVolumeFactor;
-    const obvIncreasing = obv > OBV.calculate({
-      close: priceHistory.slice(0, -1),
-      volume: volumeHistory.slice(0, -1)
-    }).slice(-1)[0];
+    const obvIncreasing = obvHistory.slice(-3)[2] > obvHistory.slice(-3)[1] && obvHistory.slice(-3)[1] > obvHistory.slice(-3)[0];
     const rsiOk = rsi > 50 && rsi < STRATEGY_CONFIG.rsiOverbought;
     const priceAboveFastSMA = close > fastSMA;
     const isGreenCandle = close > parseFloat(kline.open);
-    
-    // Condição de entrada
+
     if (!isBought && isUptrend && hasHighVolume && obvIncreasing && rsiOk && priceAboveFastSMA && isGreenCandle) {
+      if (Date.now() - lastTradeTime < STRATEGY_CONFIG.tradeCooldownMs) return;
+      lastTradeTime = Date.now();
       console.log("💚 Sinal de COMPRA detectado");
-      console.log(`📊 Indicadores: 
-        FastSMA: ${fastSMA.toFixed(2)}
-        SlowSMA: ${slowSMA.toFixed(2)}
-        Volume: ${volume.toFixed(2)} (Avg: ${volumeSMA.toFixed(2)})
-        RSI: ${rsi.toFixed(2)}
-        OBV: ${obv.toFixed(2)}`);
-      
       executeTrade("BUY", close, {
-        fastSMA,
-        slowSMA,
-        volume,
-        volumeSMA,
-        rsi,
-        obv
+        fastSMA, slowSMA, volume, volumeSMA, rsi, obv
       });
     }
-    
-    // Condições de saída
+
     if (isBought) {
-      const currentProfitPercent = (close - buyPrice) / buyPrice * 100;
       const trailingStopPrice = highestPriceSinceBuy * (1 - STRATEGY_CONFIG.trailingStopPercent);
-      
       const stopLoss = close <= buyPrice * (1 - STRATEGY_CONFIG.stopLossPercent);
       const takeProfit = close >= buyPrice * (1 + STRATEGY_CONFIG.takeProfitPercent);
       const trailingStop = close <= trailingStopPrice;
       const rsiOverbought = rsi >= STRATEGY_CONFIG.rsiOverbought;
       const trendReversal = fastSMA < slowSMA;
-      
+
       if (stopLoss || takeProfit || trailingStop || rsiOverbought || trendReversal) {
         let reason = "";
         if (stopLoss) reason = `Stop Loss (${STRATEGY_CONFIG.stopLossPercent * 100}%)`;
@@ -162,8 +127,8 @@ export function processKlineData(kline: any) {
         else if (trailingStop) reason = `Trailing Stop (${STRATEGY_CONFIG.trailingStopPercent * 100}%)`;
         else if (rsiOverbought) reason = `RSI Sobrecarregado (${rsi.toFixed(1)})`;
         else if (trendReversal) reason = "Reversão de Tendência";
-        
-        console.log(`❤️ Sinal de VENDA (${reason}) | Lucro: ${currentProfitPercent.toFixed(2)}%`);
+
+        console.log(`❤️ Sinal de VENDA (${reason})`);
         executeTrade("SELL", close);
       }
     }
@@ -217,21 +182,12 @@ async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: 
   }
 }
 
-// Funções auxiliares (mantidas do seu código original)
 export function getCurrentStatus() {
-  return {
-    isBought,
-    buyPrice,
-    tradeQuantity,
-    symbol,
-    highestPriceSinceBuy
-  };
+  return { isBought, buyPrice, tradeQuantity, symbol, highestPriceSinceBuy };
 }
 
 export async function forceSellNow() {
-  if (!isBought) {
-    return { status: 'warning', message: 'Nenhuma operação aberta para vender.' };
-  }
+  if (!isBought) return { status: 'warning', message: 'Nenhuma operação aberta para vender.' };
 
   const currentPrice = priceHistory[priceHistory.length - 1] || buyPrice;
   console.log(`🔴 VENDA MANUAL executada a ${currentPrice.toFixed(6)} USD`);
