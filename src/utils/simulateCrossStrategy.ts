@@ -26,7 +26,7 @@ interface Trade {
 const CONFIG = {
   pair: "BTCUSDT",
   interval: "15m",
-  daysToLoad: 1, // Analisa os últimos 30 dias
+  daysToLoad: 60, // Analisa os últimos 30 dias
   fastSMA: 9,
   slowSMA: 21,
   volumeSMA: 20,
