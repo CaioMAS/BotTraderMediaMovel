@@ -1,12 +1,9 @@
-// strategyService.ts - versão com technicalindicators
-
 import { newOrder } from "./orderService";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
 import axios from "axios";
 import { SMA, RSI, OBV } from 'technicalindicators';
 
-// Configurações da estratégia
 const STRATEGY_CONFIG = {
   fastSMA: 9,
   slowSMA: 21,
@@ -21,16 +18,22 @@ const STRATEGY_CONFIG = {
   minTrendStrength: 0.0003
 };
 
-// Estado do trading
 let isBought = false;
 let buyPrice = 0;
 let highestPriceSinceBuy = 0;
 const tradeQuantity = parseFloat(process.env.TRADE_QUANTITY || "0.01");
 const symbol = process.env.SYMBOL || 'BTCUSDT';
 
-// Histórico de dados
 let priceHistory: number[] = [];
 let volumeHistory: number[] = [];
+
+function logStatus(currentPrice: number) {
+  const statusMessage = `[${new Date().toISOString()}] ${symbol} | Preço: ${currentPrice} | Status: ` +
+    (isBought ? `COMPRADO (${buyPrice})` : 'LIVRE');
+  process.stdout.write('\x1b[0G');
+  process.stdout.write(statusMessage);
+  process.stdout.write('\x1b[K');
+}
 
 export async function fetchInitialCandles() {
   try {
@@ -41,11 +44,8 @@ export async function fetchInitialCandles() {
         limit: 100,
       },
     });
-    
-    // Armazena preços e volumes
     priceHistory = response.data.map((candle: any) => parseFloat(candle[4]));
     volumeHistory = response.data.map((candle: any) => parseFloat(candle[5]));
-    
     console.log(`✅ Carregados ${priceHistory.length} candles iniciais`);
   } catch (error) {
     console.error("❌ Erro ao buscar candles iniciais:", error);
@@ -56,31 +56,23 @@ export async function startTrading() {
   console.log("🔁 Iniciando processo de trading com estratégia MM + Volume + RSI");
   await fetchInitialCandles();
   await connectToBinance();
-  
-  // Monitoramento de status
+
   setInterval(async () => {
     try {
       const { data } = await axios.get(`https://api.binance.com/api/v3/ticker/price`, {
         params: { symbol }
       });
-  
       const currentPrice = parseFloat(data.price);
-      
-      // Atualiza preço máximo para trailing stop
       if (isBought) {
         highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
       }
-  
-      console.clear();
-      console.log(`🩺 BOT VIVO | ${symbol} | Estratégia MM+Volume+RSI`);
-      console.log(`💰 Preço atual: ${currentPrice}`);
-      console.log(`📦 Histórico: ${priceHistory.length} candles`);
-      console.log(`📊 Status: ${isBought ? `🟢 COMPRADO a ${buyPrice} (Max: ${highestPriceSinceBuy})` : '🔴 LIVRE'}`);
+      logStatus(currentPrice);
     } catch (err) {
-      console.error("Erro ao buscar preço atual:", err);
+      console.error("\nErro ao buscar preço atual:", err);
     }
   }, 5000);
 }
+
 
 export function processKlineData(kline: any) {
   const close = parseFloat(kline.close);
