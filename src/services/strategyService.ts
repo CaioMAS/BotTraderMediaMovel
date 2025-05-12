@@ -204,5 +204,31 @@ export async function forceSellNow() {
   }
 }
 
+export function logCurrentIndicators() {
+  if (candleHistory.length < 100) {
+    const msg = "⏳ Aguardando candles suficientes para calcular indicadores...";
+    log(msg);
+    return { status: "waiting", message: msg };
+  }
+
+  const { fastSMA, slowSMA, volumeSMA, rsi, obv } = calculateIndicators();
+  const current = {
+    preçoAtual: priceHistory.at(-1),
+    fastSMA: fastSMA.at(-1),
+    slowSMA: slowSMA.at(-1),
+    volumeAtual: volumeHistory.at(-1),
+    volumeSMA: volumeSMA.at(-1),
+    rsi: rsi.at(-1),
+    obvAtual: obv.at(-1),
+    obvAnterior: obv.at(-2),
+    obvAtrasado: obv.at(-3)
+  };
+
+  log("📊 Indicadores atuais:");
+  log(JSON.stringify(current, null, 2));
+
+  return { status: "success", indicators: current };
+}
+
 console.clear();
 log("🟢 Bot iniciado");

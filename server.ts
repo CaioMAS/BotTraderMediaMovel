@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import { startTrading, getCurrentStatus, forceSellNow } from './src/services/strategyService';
+import { startTrading, getCurrentStatus, forceSellNow, logCurrentIndicators  } from './src/services/strategyService';
 import { config } from './src/config/dotenv';
 
 const app = express();
@@ -86,6 +86,17 @@ app.post('/sell-now', authenticateToken, async (req: Request, res: Response): Pr
     const code = msg.includes('Nenhuma operação') ? 400 : 500;
     console.error('Erro ao vender:', error);
     res.status(code).json({ status: 'error', message: msg });
+  }
+});
+
+// 🔒 /debug-indicators
+app.get('/debug-indicators', authenticateToken, (req: Request, res: Response) => {
+  try {
+    const result = logCurrentIndicators();
+    res.json(result);
+  } catch (error: any) {
+    console.error('Erro ao logar indicadores:', error);
+    res.status(500).json({ status: 'error', message: 'Erro ao logar indicadores.' });
   }
 });
 
