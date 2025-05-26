@@ -93,61 +93,65 @@ function calculateIndicators() {
   };
 }
 
-export function processKlineData(kline: any) {
-  try {
-    if (!kline.k.x) return;
-
-    const newCandle = {
-      timestamp: kline.k.t,
-      open: parseFloat(kline.k.o),
-      high: parseFloat(kline.k.h),
-      low: parseFloat(kline.k.l),
-      close: parseFloat(kline.k.c),
-      volume: parseFloat(kline.k.v)
-    };
-
-    candleHistory.push(newCandle);
-    candleHistory = candleHistory.slice(-100);
-    priceHistory = candleHistory.map(c => c.close);
-    volumeHistory = candleHistory.map(c => c.volume);
-
-    const requiredLength = Math.max(CONFIG.fastSMA, CONFIG.slowSMA, CONFIG.volumeSMA, CONFIG.rsiPeriod) + 10;
-    if (candleHistory.length < requiredLength) return;
-
-    const { fastSMA, slowSMA, volumeSMA, rsi, obv } = calculateIndicators();
-    const price = newCandle.close;
-    const currentVolume = newCandle.volume;
-    const avgVolume = volumeSMA[volumeSMA.length - 1] || 1;
-
-    const isUptrend = fastSMA.at(-1)! > slowSMA.at(-1)! && (fastSMA.at(-1)! - fastSMA.at(-2)!) > CONFIG.minTrendStrength;
-    const hasHighVolume = currentVolume > avgVolume * CONFIG.minVolumeFactor;
-    const rsiValue = rsi[rsi.length - 1] || 50;
-    const obvIncreasing = obv[obv.length - 1] > obv[obv.length - 2] && obv[obv.length - 2] > obv[obv.length - 3];
-    const priceAboveFastSMA = price > fastSMA[fastSMA.length - 1];
-    const candleBullish = newCandle.close > newCandle.open;
-
-    const shouldBuy = !isBought && isUptrend && hasHighVolume && obvIncreasing && priceAboveFastSMA && (rsiValue > 50 && rsiValue < CONFIG.rsiOverbought) && candleBullish;
-    if (shouldBuy) {
-      log(`💚 COMPRA em ${price.toFixed(6)}`);
-      executeTrade("BUY", price, { fastSMA: fastSMA.at(-1), slowSMA: slowSMA.at(-1), rsi: rsiValue });
-    }
-
-    if (isBought) {
-      const exitReasons = [];
-      if (price <= buyPrice * (1 - CONFIG.stopLossPercent)) exitReasons.push("STOP LOSS");
-      if (price >= buyPrice * (1 + CONFIG.takeProfitPercent)) exitReasons.push("TAKE PROFIT");
-      if (price <= highestPriceSinceBuy * (1 - CONFIG.trailingStopPercent)) exitReasons.push("TRAILING STOP");
-      if (rsiValue >= CONFIG.rsiOverbought) exitReasons.push("RSI OVERBOUGHT");
-      if (fastSMA.at(-1)! < slowSMA.at(-1)!) exitReasons.push("TENDÊNCIA REVERSÃO");
-
-      if (exitReasons.length > 0) {
-        log(`❤️ VENDA em ${price.toFixed(6)} | Motivo: ${exitReasons.join(' + ')}`);
-        executeTrade("SELL", price, { exitReason: exitReasons.join(' | ') });
-      }
-    }
-  } catch (e: any) {
-    log(`❌ Erro ao processar candle: ${e.message}`);
-  }
+export function processKlineData(kline: any) {  
+  try {  
+    // Validação robusta para evitar erro de leitura de propriedades indefinidas  
+    if (!kline || !kline.k || typeof kline.k.x === 'undefined') {  
+      log("⚠️ Kline inválido recebido, ignorando...");  
+      return;  
+    }  
+  
+    const newCandle = {  
+      timestamp: kline.k.t,  
+      open: parseFloat(kline.k.o),  
+      high: parseFloat(kline.k.h),  
+      low: parseFloat(kline.k.l),  
+      close: parseFloat(kline.k.c),  
+      volume: parseFloat(kline.k.v)  
+    };  
+  
+    candleHistory.push(newCandle);  
+    candleHistory = candleHistory.slice(-100);  
+    priceHistory = candleHistory.map(c => c.close);  
+    volumeHistory = candleHistory.map(c => c.volume);  
+  
+    const requiredLength = Math.max(CONFIG.fastSMA, CONFIG.slowSMA, CONFIG.volumeSMA, CONFIG.rsiPeriod) + 10;  
+    if (candleHistory.length < requiredLength) return;  
+  
+    const { fastSMA, slowSMA, volumeSMA, rsi, obv } = calculateIndicators();  
+    const price = newCandle.close;  
+    const currentVolume = newCandle.volume;  
+    const avgVolume = volumeSMA[volumeSMA.length - 1] || 1;  
+  
+    const isUptrend = fastSMA.at(-1)! > slowSMA.at(-1)! && (fastSMA.at(-1)! - fastSMA.at(-2)!) > CONFIG.minTrendStrength;  
+    const hasHighVolume = currentVolume > avgVolume * CONFIG.minVolumeFactor;  
+    const rsiValue = rsi[rsi.length - 1] || 50;  
+    const obvIncreasing = obv[obv.length - 1] > obv[obv.length - 2] && obv[obv.length - 2] > obv[obv.length - 3];  
+    const priceAboveFastSMA = price > fastSMA[fastSMA.length - 1];  
+    const candleBullish = newCandle.close > newCandle.open;  
+  
+    const shouldBuy = !isBought && isUptrend && hasHighVolume && obvIncreasing && priceAboveFastSMA && (rsiValue > 50 && rsiValue < CONFIG.rsiOverbought) && candleBullish;  
+    if (shouldBuy) {  
+      log(`💚 COMPRA em ${price.toFixed(6)}`);  
+      executeTrade("BUY", price, { fastSMA: fastSMA.at(-1), slowSMA: slowSMA.at(-1), rsi: rsiValue });  
+    }  
+  
+    if (isBought) {  
+      const exitReasons = [];  
+      if (price <= buyPrice * (1 - CONFIG.stopLossPercent)) exitReasons.push("STOP LOSS");  
+      if (price >= buyPrice * (1 + CONFIG.takeProfitPercent)) exitReasons.push("TAKE PROFIT");  
+      if (price <= highestPriceSinceBuy * (1 - CONFIG.trailingStopPercent)) exitReasons.push("TRAILING STOP");  
+      if (rsiValue >= CONFIG.rsiOverbought) exitReasons.push("RSI OVERBOUGHT");  
+      if (fastSMA.at(-1)! < slowSMA.at(-1)!) exitReasons.push("TENDÊNCIA REVERSÃO");  
+  
+      if (exitReasons.length > 0) {  
+        log(`❤️ VENDA em ${price.toFixed(6)} | Motivo: ${exitReasons.join(' + ')}`);  
+        executeTrade("SELL", price, { exitReason: exitReasons.join(' | ') });  
+      }  
+    }  
+  } catch (e: any) {  
+    log(`❌ Erro ao processar candle: ${e.message}`);  
+  }  
 }
 
 async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: any) {
