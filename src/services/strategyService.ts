@@ -1,4 +1,4 @@
-// strategyService.ts - Simplificado (mesma estratégia, logs mínimos)
+// strategyService.ts - Usando technicalindicators
 import { newOrder } from "./orderService";
 import { appendToJSONFile, logOperation } from "../utils/fileHandler";
 import { connectToBinance } from "./webSocketService";
@@ -6,6 +6,7 @@ import axios from "axios";
 import { SMA, RSI, OBV } from 'technicalindicators';
 import dayjs from 'dayjs';
 
+// Configurações carregadas do .env com valores padrão
 const CONFIG = {
   fastSMA: parseInt(process.env.FAST_SMA || "9"),
   slowSMA: parseInt(process.env.SLOW_SMA || "21"),
@@ -120,9 +121,9 @@ export function processKlineData(kline: any) {
 
     const isUptrend = fastSMA.at(-1)! > slowSMA.at(-1)! && (fastSMA.at(-1)! - fastSMA.at(-2)!) > CONFIG.minTrendStrength;
     const hasHighVolume = currentVolume > avgVolume * CONFIG.minVolumeFactor;
-    const rsiValue = rsi.at(-1)!;
-    const obvIncreasing = obv.at(-1)! > obv.at(-2)! && obv.at(-2)! > obv.at(-3)!;
-    const priceAboveFastSMA = price > fastSMA.at(-1)!;
+    const rsiValue = rsi[rsi.length - 1] || 50;
+    const obvIncreasing = obv[obv.length - 1] > obv[obv.length - 2] && obv[obv.length - 2] > obv[obv.length - 3];
+    const priceAboveFastSMA = price > fastSMA[fastSMA.length - 1];
     const candleBullish = newCandle.close > newCandle.open;
 
     const shouldBuy = !isBought && isUptrend && hasHighVolume && obvIncreasing && priceAboveFastSMA && (rsiValue > 50 && rsiValue < CONFIG.rsiOverbought) && candleBullish;
@@ -164,17 +165,40 @@ async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: 
       entryTime = Date.now();
       isBought = true;
 
-      appendToJSONFile("trades", {
-        type: "BUY", date: new Date().toISOString(), symbol, price, quantity: tradeQuantity, indicators
+      appendToJSONFile("purchases", {
+        date: new Date().toISOString(), 
+        symbol, 
+        price, 
+        quantity: tradeQuantity, 
+        indicators
       });
     } else {
       const profit = (price - buyPrice) * tradeQuantity;
+      const percentProfit = ((price / buyPrice - 1) * 100).toFixed(2);
       isBought = false;
 
+      appendToJSONFile("sales", {
+        date: new Date().toISOString(), 
+        symbol, 
+        price, 
+        quantity: tradeQuantity, 
+        profit,
+        percentProfit: percentProfit + '%',
+        holdingTime: ((Date.now() - entryTime) / (1000 * 60)).toFixed(1) + 'min',
+        exitReason: indicators?.exitReason
+      });
+      
+      // Registrar o trade completo
       appendToJSONFile("trades", {
-        type: "SELL", date: new Date().toISOString(), symbol, price, quantity: tradeQuantity, profit,
-        roi: ((price / buyPrice - 1) * 100).toFixed(2) + '%',
-        duration: ((Date.now() - entryTime) / 1000).toFixed(0) + 's',
+        entryDate: new Date(entryTime).toISOString(),
+        exitDate: new Date().toISOString(),
+        symbol,
+        entryPrice: buyPrice,
+        exitPrice: price,
+        quantity: tradeQuantity,
+        profit,
+        percentProfit,
+        holdingTime: ((Date.now() - entryTime) / (1000 * 60)).toFixed(1),
         exitReason: indicators?.exitReason
       });
     }
@@ -185,7 +209,17 @@ async function executeTrade(action: "BUY" | "SELL", price: number, indicators?: 
 
 export function getCurrentStatus() {
   const lastPrice = priceHistory?.at(-1) ?? 0;
-  return { isBought, buyPrice, currentPrice: lastPrice, profit: isBought ? ((lastPrice / buyPrice - 1) * 100) : 0, symbol, tradeQuantity };
+  return { 
+    isBought, 
+    buyPrice, 
+    currentPrice: lastPrice, 
+    profit: isBought ? ((lastPrice / buyPrice - 1) * 100) : 0, 
+    symbol, 
+    tradeQuantity,
+    highestPriceSinceBuy,
+    lowestPriceSinceBuy,
+    holdingTime: isBought ? ((Date.now() - entryTime) / (1000 * 60)).toFixed(1) + 'min' : '0min'
+  };
 }
 
 export async function forceSellNow() {
@@ -214,14 +248,14 @@ export function logCurrentIndicators() {
   const { fastSMA, slowSMA, volumeSMA, rsi, obv } = calculateIndicators();
   const current = {
     preçoAtual: priceHistory.at(-1),
-    fastSMA: fastSMA.at(-1),
-    slowSMA: slowSMA.at(-1),
+    fastSMA: fastSMA[fastSMA.length - 1],
+    slowSMA: slowSMA[slowSMA.length - 1],
     volumeAtual: volumeHistory.at(-1),
-    volumeSMA: volumeSMA.at(-1),
-    rsi: rsi.at(-1),
-    obvAtual: obv.at(-1),
-    obvAnterior: obv.at(-2),
-    obvAtrasado: obv.at(-3)
+    volumeSMA: volumeSMA[volumeSMA.length - 1],
+    rsi: rsi[rsi.length - 1],
+    obvAtual: obv[obv.length - 1],
+    obvAnterior: obv[obv.length - 2],
+    obvAtrasado: obv[obv.length - 3]
   };
 
   log("📊 Indicadores atuais:");
@@ -231,4 +265,4 @@ export function logCurrentIndicators() {
 }
 
 console.clear();
-log("🟢 Bot iniciado");
+log("🟢 Bot iniciado com estratégia consistente com o backtest");

@@ -24,9 +24,9 @@ interface Trade {
 
 // Configurações ajustáveis
 const CONFIG = {
-  pair: "WIFUSDT",
+  pair: "ETHUSDT",
   interval: "15m",
-  daysToLoad: 1, // Analisa os últimos 30 dias
+  daysToLoad: 30, // Analisa os últimos 30 dias
   fastSMA: 9,
   slowSMA: 21,
   volumeSMA: 20,
@@ -37,7 +37,7 @@ const CONFIG = {
   stopLossPercent: 0.02,
   takeProfitPercent: 0.04,
   maxTradesPerDay: 20, // Limite de trades diários
-  quantity: 50, // 0.001 BTC como você mencionou
+  quantity: 0.05, // 0.001 BTC como você mencionou
   trailingStopPercent: 0.015,
   minTrendStrength: 0.0003
 };
